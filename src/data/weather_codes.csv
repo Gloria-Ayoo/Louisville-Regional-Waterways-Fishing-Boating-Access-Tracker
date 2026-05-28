@@ -1,0 +1,29 @@
+code,description,icon,category
+0,Clear sky,☀️,Clear
+1,Mainly clear,🌤️,Clear
+2,Partly cloudy,⛅,Cloudy
+3,Overcast,☁️,Cloudy
+45,Fog,🌫️,Fog
+48,Depositing rime fog,🌫️,Fog
+51,Light drizzle,🌧️,Rain
+53,Moderate drizzle,🌧️,Rain
+55,Dense drizzle,🌧️,Rain
+56,Light freezing drizzle,🌨️,Snow
+57,Dense freezing drizzle,🌨️,Snow
+61,Slight rain,🌧️,Rain
+63,Moderate rain,🌧️,Rain
+65,Heavy rain,🌧️,Rain
+66,Light freezing rain,🌨️,Snow
+67,Heavy freezing rain,🌨️,Snow
+71,Slight snow fall,❄️,Snow
+73,Moderate snow fall,❄️,Snow
+75,Heavy snow fall,❄️,Snow
+77,Snow grains,❄️,Snow
+80,Slight rain showers,🌦️,Rain
+81,Moderate rain showers,🌦️,Rain
+82,Violent rain showers,⛈️,Storm
+85,Slight snow showers,🌨️,Snow
+86,Heavy snow showers,🌨️,Snow
+95,Thunderstorm,⛈️,Storm
+96,Thunderstorm with slight hail,⛈️,Storm
+99,Thunderstorm with heavy hail,⛈️,Storm
