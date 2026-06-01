@@ -1,133 +1,280 @@
-# Louisville Regional Waterways — Fishing Recommendation System
+# Louisville Waterways Fishing — ETL Pipeline
 
-An ETL pipeline that forecasts fishing conditions at Louisville-area waterway access points by combining weather and river-flood data from Open-Meteo, then writes the results into a Supabase Postgres warehouse.
+An end-to-end ETL pipeline that pulls 7-day weather and river-flood forecasts
+from [Open-Meteo](https://open-meteo.com/) for six fishing locations in the
+Louisville, KY area, transforms them into a normalized schema, and loads the
+results into a Supabase PostgreSQL database using **incremental upsert**
+loading. The final fact table (`fishing_recommendation`) joins all sources,
+scores each day at each location for fish activity, and flags safety status
+(Safe / Caution / Unsafe) — ready to drive a Power BI report or Plotly Dash
+dashboard.
 
-## What it does
+The entire pipeline lives in a **single Python script**, `src/etl_pipeline.py`,
+which executes start-to-finish without any manual modification.
 
-For 6 fishing locations around Louisville, the pipeline:
+---
 
-1. Pulls hourly weather + daily river-discharge forecasts from Open-Meteo (7-day window).
-2. Aggregates hourly readings into one row per day per location.
-3. Classifies river flow (Low / Normal / High) and computes a fish activity score (0–100) and safety status (Safe / Caution / Unsafe) per location per day.
-4. Loads everything into Supabase across 5 normalized tables (3NF).
-
-## Folder structure
+## Repository structure
 
 ```
-Fishing_recom_sys_/
+Louisville_Fishing_Recommendation_ETLPipeline/
+├── .env                   # Your Supabase credentials — created from .env.example, gitignored
+├── .gitignore             # Excludes .env, generated CSVs, venvs, etc.
+├── .env.example           # Template for database credentials
+├── README.md              # This file
+├── requirements.txt       # Python dependencies
+├── data/                  # Generated intermediate CSVs (created on first run, gitignored)
+├── docs/
+│   └── validation.md      # Data quality & validation framework write-up
 ├── src/
-│   ├── extract_script.py     # Pulls from Open-Meteo, writes CSVs
-│   └── load_script.py        # Reads CSVs, loads Supabase, builds recommendations
-├── data/                     # Generated CSVs (gitignored)
-│   ├── weather_codes.csv
-│   ├── weather_data.csv
-│   └── river_flood_data.csv
-├── .env                      # Database credentials (gitignored)
-├── .env.example              # Template for .env
-├── .gitignore
-├── requirements.txt
-└── README.md
+│   └── etl_pipeline.py    # The full ETL pipeline — extract, transform, validate, load
+└── screenshots/           # Evidence of successful database loading
 ```
+
+Note: `.env`, `data/`, and `screenshots/` are at the project root (siblings of
+`src/`), not nested inside it. The script in `src/etl_pipeline.py` is
+hard-wired to look one level up for `.env` and to create `data/` at the
+project root regardless of where you run the script from.
+
+---
+
+## Pipeline stages
+
+The single script `etl_pipeline.py` runs four sequential stages, each marked
+with a `STAGE N/4` log banner:
+
+| Stage | What it does |
+|-------|--------------|
+| 1/4 — Extract + Transform | Pulls weather + flood forecasts from Open-Meteo for each location, retries on transient failures, aggregates hourly readings to daily, derives `flow_category`, standardizes column names, and writes intermediate CSVs |
+| 2/4 — Validation | Runs seven data-quality checks before any database write |
+| 3/4 — Database Load | Creates the schema if needed and **upserts** (INSERT … ON CONFLICT DO UPDATE) into `weather_code`, `location`, `weather_data`, `river_flood_data` |
+| 4/4 — Analytics-ready Fact Table | Builds `fishing_recommendation` with derived `safety_status` and `fish_activity_score` columns; upserts on `(location_id, date)` |
+
+---
+
+## Prerequisites
+
+- **Python 3.12** (3.10+ should work; tested on 3.12)
+- A **Supabase project** (free tier is fine) with the database password handy
+- Internet access to reach `api.open-meteo.com` and `flood-api.open-meteo.com`
+
+---
 
 ## Setup
 
-### 1. Clone and install
+### 1. Clone the repository
 
 ```bash
 git clone <repo-url>
-cd Fishing_recom_sys_
-python -m venv venv
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
+cd Louisville_Fishing_Recommendation_ETLPipeline
+```
+
+### 2. Create and activate a virtual environment (recommended)
+
+```bash
+# Windows (PowerShell)
+python -m venv .venv
+.venv\Scripts\activate
+
+# macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Install dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Create your `.env`
+### 4. Configure database credentials
 
-Copy `.env.example` to `.env` and fill in your Supabase credentials:
+From the **project root** (the folder you `cd`'d into in step 1 — not
+`src/`), copy `.env.example` to `.env` and fill in your Supabase connection
+values:
+
+```bash
+# Windows
+copy .env.example .env
+
+# macOS / Linux
+cp .env.example .env
+```
+
+Then edit `.env`:
 
 ```
 user=postgres
-password=<your_supabase_database_password>
-host=db.<your_project_ref>.supabase.co
+password=YOUR_SUPABASE_PASSWORD
+host=db.YOUR_PROJECT_REF.supabase.co
 port=5432
 dbname=postgres
+RESET_TABLES=false
 ```
 
-Find these in the Supabase dashboard:
-- **password**: Project Settings → Database → Database password
-- **host**: Project Settings → Database → Host
+You can find these values in the Supabase dashboard under
+**Project Settings → Database → Connection info**.
 
-### 3. Run the pipeline
+`RESET_TABLES` controls the load mode (see *Loading strategy* below).
+
+---
+
+## Running the pipeline
+
+One command does everything:
 
 ```bash
-cd src
-python extract_script.py    # Step 1: pull from Open-Meteo, write CSVs
-python load_script.py       # Step 2: load CSVs into Supabase
+python src/etl_pipeline.py
 ```
 
-The first run will create the schema. By default, `load_script.py` drops and recreates all tables on each run (set `RESET_TABLES=false` in `.env` to disable).
+Expected output (abridged):
+
+```
+2026-05-30 09:00:00 [INFO] etl: ============================================================
+2026-05-30 09:00:00 [INFO] etl: Louisville Waterways Fishing -- ETL Pipeline
+2026-05-30 09:00:00 [INFO] etl: ============================================================
+2026-05-30 09:00:00 [INFO] etl: STAGE 1/4: Extract + Transform (Open-Meteo APIs)
+2026-05-30 09:00:00 [INFO] etl: Fetching: McAlpine Locks & Dam (location_id=1)
+...
+2026-05-30 09:00:05 [INFO] etl: STAGE 2/4: Data quality validation
+2026-05-30 09:00:05 [INFO] etl: [weather_data] schema check passed (columns present: [...])
+2026-05-30 09:00:05 [INFO] etl: [weather_data] null check passed on columns ['location_id', 'date']
+2026-05-30 09:00:05 [INFO] etl: All validations passed (warnings, if any, listed above).
+2026-05-30 09:00:05 [INFO] etl: STAGE 3/4: Database load
+2026-05-30 09:00:05 [INFO] etl: INCREMENTAL mode -- preserving existing data, upserting on conflict.
+2026-05-30 09:00:06 [INFO] etl: [weather_data] upserted 42 rows (insert + update)
+...
+2026-05-30 09:00:08 [INFO] etl: STAGE 4/4: Build analytics-ready fact table
+2026-05-30 09:00:09 [INFO] etl: fishing_recommendation populated -- ready for Power BI / Plotly Dash. (42 analytics-ready rows)
+2026-05-30 09:00:09 [INFO] etl: ETL PIPELINE COMPLETE
+```
+
+The script can be re-run as often as you want without manual edits or
+duplicate data (see below).
+
+---
+
+## Loading strategy: incremental upsert
+
+This pipeline pulls a **rolling 7-day forecast**, which means every re-run
+produces overlapping date ranges with potentially-updated forecast values
+for the same `(location_id, date)` pair. The natural fit is **incremental
+upsert**, not full refresh.
+
+Each load uses:
+
+```sql
+INSERT INTO <table> (...) VALUES (...)
+ON CONFLICT (location_id, date) DO UPDATE SET col = EXCLUDED.col, ...
+```
+
+This one statement satisfies all three sub-requirements of incremental
+loading:
+
+| Requirement | How it's met |
+|-------------|--------------|
+| Prevent duplicate loads | `UNIQUE (location_id, date)` + `ON CONFLICT` clause |
+| Append only new records | New date keys are inserted normally |
+| Update existing records on key | Existing keys are overwritten via `DO UPDATE SET col = EXCLUDED.col` |
+
+### Full refresh mode (opt-in)
+
+If you ever need a fresh start (schema changes, corrupted state, etc.), set:
+
+```
+RESET_TABLES=true
+```
+
+in `.env` and re-run. The script will drop and recreate every table.
+Default is `false` so re-runs don't lose history.
+
+---
 
 ## Database schema
 
-5 tables in approximate 3NF:
+Five tables in the `public` schema (full details in
+[`docs/validation.md`](docs/validation.md) and the schema doc):
 
 | Table | Purpose |
-|---|---|
-| `weather_code` | WMO weather code lookup |
-| `location` | Fishing access points (parks, ramps, docks) |
-| `weather_data` | Daily weather per location |
-| `river_flood_data` | Daily river discharge per location |
-| `fishing_recommendation` | Fact table: safety status + fish activity score |
+| ----- | ------- |
+| `weather_code` | WMO weather-code reference (code, description, icon, category) |
+| `location` | Six Louisville-area fishing spots (lat/long) |
+| `weather_data` | Daily weather per location (temp, wind, precip, pressure) |
+| `river_flood_data` | Daily river discharge per location + `flow_category` |
+| `fishing_recommendation` | Analytics-ready fact table with `safety_status` + `fish_activity_score` |
 
-See `data_schema_doc_2_Fishing_Recommendation_System_Data_Warehouse.docx` for full ER diagram and column definitions.
+Foreign-key flow:
+
+```
+weather_code  <--  weather_data
+location      <--  weather_data, river_flood_data, fishing_recommendation
+weather_data  <--  fishing_recommendation
+river_flood_data <-- fishing_recommendation
+```
+
+---
+
+## Derived metrics
+
+| Metric | Rule |
+|--------|------|
+| `flow_category` | Low < 100, Normal 100–1500, High > 1500 m³/s (Unknown if NULL) |
+| `safety_status` | Unsafe if wind > 25 mph OR flow > 3000 m³/s; Caution if precip > 0.7 in; otherwise Safe |
+| `fish_activity_score` | 0–100 composite of temp, wind, flow, precip (banded scoring; see code) |
+
+---
 
 ## Data quality & validation
 
-The pipeline runs **6 validation checks**. Validation failures log a warning and the pipeline stops before writing bad data to the warehouse.
+The pipeline runs **seven** validation checks before any data is written to
+the database. See [`docs/validation.md`](docs/validation.md) for a full
+write-up of what each check does, why it matters, and what happens if it
+fails.
 
-### 1. API response validation (in extract)
-- **What:** Verifies each Open-Meteo response contains the expected `hourly` or `daily` keys before parsing.
-- **Why:** Open-Meteo may return error responses with no data block for invalid coordinates or temporary outages. Parsing a malformed response silently produces empty tables.
-- **On failure:** That location is skipped, logged as a warning, pipeline continues with remaining locations.
+---
 
-### 2. Null value check (in load)
-- **What:** Counts nulls in critical not-null columns (`location_id`, `date`) before insert.
-- **Why:** A null in a key column breaks foreign-key joins downstream and corrupts the recommendation fact table.
-- **On failure:** Pipeline aborts with the offending row count logged.
+## Analytics consumption
 
-### 3. Duplicate detection (in load)
-- **What:** Checks that `(location_id, date)` is unique in `weather_data` and `river_flood_data`.
-- **Why:** The schema enforces a `UNIQUE (location_id, date)` constraint; duplicates would crash the insert mid-load and leave partial data.
-- **On failure:** Pipeline aborts with a list of duplicate keys.
+The `fishing_recommendation` table is designed as a Power BI / Plotly Dash
+endpoint. Sample query:
 
-### 4. Referential integrity check (in load)
-- **What:** Confirms every `location_id` in `weather_data.csv` and `river_flood_data.csv` exists in the hardcoded `LOCATIONS` seed.
-- **Why:** An unknown `location_id` would violate the foreign key and crash the insert.
-- **On failure:** Pipeline aborts and prints the offending `location_id` values.
+```sql
+SELECT
+  l.location_name,
+  r.date,
+  r.safety_status,
+  r.fish_activity_score,
+  w.temperature_f,
+  w.wind_speed_mph,
+  w.precipitation_in,
+  f.discharge_m3s,
+  f.flow_category
+FROM fishing_recommendation r
+JOIN location          l ON l.location_id = r.location_id
+JOIN weather_data      w ON w.weather_id  = r.weather_id
+JOIN river_flood_data  f ON f.flood_id    = r.flood_id
+ORDER BY r.date, l.location_name;
+```
 
-### 5. Range validation (in load)
-- **What:** Asserts numeric values fall within plausible bounds — temperature_f between -50 and 130, wind_speed_mph between 0 and 200, discharge_m3s ≥ 0, fish_activity_score between 0 and 100.
-- **Why:** Catches sensor glitches or unit-conversion bugs (e.g. an API change silently switching from mph to m/s) before they reach analysts.
-- **On failure:** Logs a warning per out-of-range row; pipeline continues but flags the data for review.
+This produces a denormalized row per location per day — exactly the grain a
+dashboard wants.
 
-### 6. Row count verification (in load)
-- **What:** Confirms each location produced exactly `FORECAST_DAYS` rows in `weather_data` and `river_flood_data`.
-- **Why:** Partial data per location means the recommendation fact table will be incomplete and dashboard charts will have gaps.
-- **On failure:** Logs a warning naming the under/over-counted locations; pipeline continues so partial data is still usable.
+---
 
-## Logging & error handling
+## Troubleshooting
 
-- All scripts use Python's `logging` module (INFO level by default).
-- Logs print to console with timestamps, level, and source function.
-- Open-Meteo API calls retry up to 3 times with exponential backoff on transient failures (timeout, 5xx, connection errors).
-- Database operations are wrapped in transactions — a failure rolls back rather than leaving partial data.
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `ModuleNotFoundError: No module named 'requests'` | Packages installed into a different Python than the one running the script | Run `python -m pip install -r requirements.txt` using the same Python you launch with |
+| `Missing values in .env for: ...` | `.env` file not present or incomplete | Copy `.env.example` to `.env` and fill it in |
+| `connection refused` / timeout | Wrong Supabase host or paused project | Verify host in Supabase dashboard |
+| `password authentication failed` | Wrong password or special chars unescaped | Script URL-encodes the password automatically; check the value in `.env` |
+| `Weather API failed after 3 attempts` | Open-Meteo outage or network blocked | Re-run after a few minutes |
+| `No data fetched from Open-Meteo` | All locations failed | Check internet connection |
 
-## Notes
+---
 
-- **Authentication:** Open-Meteo is keyless, so no auth is implemented.
-- **Pagination:** Not applicable — the 7-day forecast fits in a single response.
-- **Flow categorization, safety status, and fish activity score** are computed in the load script (not extract), so all classification rules live in one place.
-- **`fishing_recommendation` is built from the database**, not the CSVs — the load script reads back the `BIGSERIAL` IDs Supabase generates for `weather_data` and `river_flood_data`, then joins them on `(location_id, date)` to populate the fact table.
+## License
+
+This project was built for an academic ETL assignment and is intended for
+educational use.
