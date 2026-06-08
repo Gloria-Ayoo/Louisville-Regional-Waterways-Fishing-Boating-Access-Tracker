@@ -1,3 +1,10 @@
+# =====================================================================
+# Louisville Waterways Fishing — ETL Pipeline Dependencies
+# =====================================================================
+# Install with:  pip install -r requirements.txt
+# Tested on Python 3.12.
+# =====================================================================
+ 
 # Core data handling
 pandas>=2.0,<3.0
 
@@ -10,3 +17,8 @@ psycopg2-binary>=2.9,<3.0
 
 # Environment variable management
 python-dotenv>=1.0,<2.0
+ 
+# Dashboard (src/dashboard.py)
+dash>=2.16
+plotly>=5.20
+dash-bootstrap-components>=1.5

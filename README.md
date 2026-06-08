@@ -27,8 +27,9 @@ Louisville_Fishing_Recommendation_ETLPipeline/
 ├── docs/
 │   └── validation.md      # Data quality & validation framework write-up
 ├── src/
-│   └── etl_pipeline.py    # The full ETL pipeline — extract, transform, validate, load
-└── screenshots/           # Evidence of successful database loading
+│   ├── etl_pipeline.py    # The full ETL pipeline — extract, transform, validate, load
+│   └── dashboard.py       # Plotly Dash web app — analytics consumption layer
+└── screenshots/           # Evidence of successful database loading + dashboard demo
 ```
 
 Note: `.env`, `data/`, and `screenshots/` are at the project root (siblings of
@@ -258,6 +259,89 @@ ORDER BY r.date, l.location_name;
 
 This produces a denormalized row per location per day — exactly the grain a
 dashboard wants.
+
+---
+
+## Running the dashboard
+
+The project ships with a Plotly Dash web application (`src/dashboard.py`) that
+visualizes the `fishing_recommendation` fact table interactively in the
+browser. It connects to the same Supabase Postgres database the ETL writes
+to, so the dashboard always reflects whatever's currently in the warehouse.
+
+### 1. Run the ETL first
+
+The dashboard reads from `fishing_recommendation`, so the warehouse must be
+populated before the app has anything to show. If you haven't already:
+
+```bash
+python src/etl_pipeline.py
+```
+
+### 2. Install dashboard dependencies
+
+The three Dash-specific packages are included in `requirements.txt` and will
+be installed by the same `pip install -r requirements.txt` step from the
+project setup. If you skipped that, install them now:
+
+```bash
+pip install dash plotly dash-bootstrap-components
+```
+
+### 3. Launch the app
+
+```bash
+python src/dashboard.py
+```
+
+Then open **http://localhost:8050** in your browser. Stop the server with
+**Ctrl+C** in the terminal.
+
+The dashboard caches data in memory on launch, so filter clicks are
+instant. Use the **Refresh data** button in the top-right corner to
+re-query Postgres after a fresh ETL run — no need to restart the app.
+
+### Dashboard screenshots
+
+![Dashboard overview](screenshots/dashboard_overview.png)
+*Full dashboard view — KPI summary, activity heatmap, safety distribution, map, and detail table*
+
+![Activity heatmap](screenshots/dashboard_heatmap.png)
+*Activity heatmap: each cell is one (location, date) pair, colored by fish activity score 0–100*
+
+![Geographic map](screenshots/dashboard_map.png)
+*Geographic view of the six fishing locations, colored by safety status for the selected date*
+
+![Detail table](screenshots/dashboard_table.png)
+*Sortable, filterable detail table with safety-coded row backgrounds*
+
+---
+
+## Business insights
+
+The dashboard is designed to answer four real questions a Louisville-area
+fisher would ask before heading out:
+
+- **When is it safe to fish?** The map and the stacked safety bar surface
+  the Safe / Caution / Unsafe split per location at a glance. Wind above
+  25 mph or river discharge above 3000 m³/s flags a day as Unsafe;
+  precipitation above 0.7 in flags Caution.
+
+- **Which spots have the best week-long outlook?** The activity heatmap
+  shows location × date as a calendar grid. Locations whose rows run mostly
+  green have a consistently good week; rows that go red toward the weekend
+  signal a deteriorating forecast.
+
+- **What's the single best place to go this week?** The "Best Spot This
+  Week" KPI surfaces the (location, date) combination with the highest
+  `fish_activity_score`, giving a quick "go here on this day" answer
+  without any chart-reading.
+
+- **How do conditions vary across locations on the same day?** The map
+  date dropdown isolates one day at a time so you can compare all six
+  spots side by side — useful when temperature and pressure are stable
+  city-wide but river flow varies meaningfully between the Ohio River
+  locations and the smaller creeks.
 
 ---
 
